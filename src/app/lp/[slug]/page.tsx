@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -7,7 +7,21 @@ interface PageProps {
   searchParams: { preview?: string };
 }
 
-async function getVariant(supabase: ReturnType<typeof createServerSupabaseClient>, campaign: { id: string }, slug: string, preview?: string | null) {
+function getBaseUrl(): string {
+  // 1. Explicit config (best)
+  if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL.replace(/\/$/, "");
+  // 2. Vercel auto-detected
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  // 3. Try to read from request headers
+  const headersList = headers();
+  const host = headersList.get("host");
+  const proto = headersList.get("x-forwarded-proto") || "https";
+  if (host) return `${proto}://${host}`;
+  // 4. Fallback
+  return "http://localhost:3000";
+}
+
+async function getVariant(supabase: ReturnType<typeof createServerSupabaseClient>, campaignId: string, slug: string, preview?: string | null) {
   let variantId = preview || null;
   if (!variantId) {
     const cookieStore = cookies();
@@ -15,63 +29,39 @@ async function getVariant(supabase: ReturnType<typeof createServerSupabaseClient
   }
 
   if (variantId) {
-    const { data } = await supabase.from("variants").select("*").eq("id", variantId).eq("campaign_id", campaign.id).single();
+    const { data } = await supabase.from("variants").select("*").eq("id", variantId).eq("campaign_id", campaignId).single();
     if (data) return data;
   }
 
-  const { data } = await supabase.from("variants").select("*").eq("campaign_id", campaign.id).eq("status", "active").order("is_control", { ascending: false }).limit(1).single();
+  const { data } = await supabase.from("variants").select("*").eq("campaign_id", campaignId).eq("status", "active").order("is_control", { ascending: false }).limit(1).single();
   return data;
-}
-
-function buildTrackedUrl(baseUrl: string, campaignId: string, variantId: string, rawCtaUrl: string): string {
-  if (!rawCtaUrl) return "";
-  return `${baseUrl}/api/click?campaign_id=${campaignId}&variant_id=${variantId}&redirect=${encodeURIComponent(rawCtaUrl)}`;
-}
-
-function processLanderHtml(rawHtml: string, overrides: Record<string, string>, trackedCtaUrl: string): string {
-  let html = rawHtml;
-
-  // Replace all {{VARIABLE}} placeholders
-  for (const [key, value] of Object.entries(overrides)) {
-    if (!value) continue;
-    html = html.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
-  }
-
-  // Remove any remaining unreplaced variables
-  html = html.replace(/\{\{[A-Z][A-Z0-9_]*\}\}/g, "");
-
-  // Inject CTA script for data-cta / class-based CTA links
-  if (trackedCtaUrl) {
-    const script = `<script>(function(){var u=${JSON.stringify(trackedCtaUrl)};document.querySelectorAll('a[data-cta],a.cta,a.cta-btn,a.cta-button,.cta a,.cta-link a').forEach(function(a){a.href=u});})();<\/script>`;
-    if (html.includes("</body>")) {
-      html = html.replace("</body>", script + "</body>");
-    } else {
-      html += script;
-    }
-  }
-
-  return html;
 }
 
 export default async function LandingPage({ params, searchParams }: PageProps) {
   const supabase = createServerSupabaseClient();
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+  const baseUrl = getBaseUrl();
 
   const { data: campaign } = await supabase.from("campaigns").select("*").eq("slug", params.slug).single();
   if (!campaign) return notFound();
 
-  const variant = await getVariant(supabase, campaign, params.slug, searchParams.preview);
+  const variant = await getVariant(supabase, campaign.id, params.slug, searchParams.preview);
   if (!variant) return notFound();
 
+  // Get the raw CTA destination from all possible sources
   const cf = (variant.custom_fields || {}) as Record<string, string>;
   const rawCtaUrl = variant.cta_url || cf.CTA_URL || "";
-  const trackedCtaUrl = buildTrackedUrl(baseUrl, campaign.id, variant.id, rawCtaUrl);
+
+  // Build fully absolute tracked CTA URL
+  const trackedCtaUrl = rawCtaUrl
+    ? `${baseUrl}/api/click?campaign_id=${campaign.id}&variant_id=${variant.id}&redirect=${encodeURIComponent(rawCtaUrl)}`
+    : "";
 
   // --- Lander repository: serve raw HTML ---
   if (campaign.lander_id) {
     const { data: lander } = await supabase.from("landers").select("html, defaults").eq("id", campaign.lander_id).single();
     if (!lander) return notFound();
 
+    // Build variable overrides: defaults < custom_fields < standard fields
     const overrides: Record<string, string> = {
       ...(lander.defaults as Record<string, string> || {}),
       ...cf,
@@ -82,10 +72,29 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
     if (variant.cta_text) overrides.CTA_TEXT = variant.cta_text;
     if (variant.cta_color) overrides.CTA_COLOR = variant.cta_color;
 
-    const html = processLanderHtml(lander.html as string, overrides, trackedCtaUrl);
+    let html = lander.html as string;
 
-    // Serve via iframe to preserve the lander's complete DOM structure
-    // (its own <html>, <head>, <body>, CSS, JS) without Next.js interference
+    // Replace all {{VARIABLE}} placeholders
+    for (const [key, value] of Object.entries(overrides)) {
+      if (!value) continue;
+      html = html.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+    }
+
+    // Remove any remaining unreplaced variables
+    html = html.replace(/\{\{[A-Z][A-Z0-9_]*\}\}/g, "");
+
+    // Inject CTA script for data-cta / class-based CTA elements
+    if (trackedCtaUrl) {
+      const script = `<script>(function(){var u=${JSON.stringify(trackedCtaUrl)};document.querySelectorAll('a[data-cta],a.cta,a.cta-btn,a.cta-button,.cta a,.cta-link a').forEach(function(a){a.href=u});})();<\/script>`;
+      if (html.includes("</body>")) {
+        html = html.replace("</body>", script + "</body>");
+      } else {
+        html += script;
+      }
+    }
+
+    // Serve lander in an iframe — preserves its full HTML structure
+    // All URLs in the HTML must be absolute (tracked CTA URL is already absolute)
     return (
       <>
         <style dangerouslySetInnerHTML={{ __html: `html,body{margin:0;padding:0;height:100%;overflow:hidden}` }} />

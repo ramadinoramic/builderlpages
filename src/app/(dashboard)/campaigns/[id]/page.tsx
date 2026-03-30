@@ -154,6 +154,17 @@ export default function CampaignDetailPage() {
     loadData();
   };
 
+  const deleteCampaign = async () => {
+    if (!confirm("Delete this campaign and all its variants, clicks, and conversions? This cannot be undone.")) return;
+    const supabase = createClient();
+    // Delete in order: conversions → clicks → variants → campaign
+    await supabase.from("conversions").delete().eq("campaign_id", campaignId);
+    await supabase.from("clicks").delete().eq("campaign_id", campaignId);
+    await supabase.from("variants").delete().eq("campaign_id", campaignId);
+    await supabase.from("campaigns").delete().eq("id", campaignId);
+    router.push("/campaigns");
+  };
+
   if (loading) return <div style={{ padding: 40, color: "#6b6b80" }}>Loading...</div>;
   if (!campaign) return <div style={{ padding: 40, color: "#6b6b80" }}>Campaign not found</div>;
 
@@ -187,6 +198,7 @@ export default function CampaignDetailPage() {
           </button>
           <button onClick={duplicateCampaign} style={{ padding: "6px 14px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "transparent", color: "#6b6b80", border: "1px solid #1e1e2e" }}>Duplicate</button>
           <a href={`/lp/${campaign.slug}`} target="_blank" rel="noopener noreferrer" style={{ padding: "6px 14px", fontSize: 12, borderRadius: 6, background: "transparent", color: "#6b6b80", border: "1px solid #1e1e2e", textDecoration: "none" }}>Open LP</a>
+          <button onClick={deleteCampaign} style={{ padding: "6px 14px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "transparent", color: "#ef4444", border: "1px solid #ef444430" }}>Delete</button>
         </div>
       </div>
 
