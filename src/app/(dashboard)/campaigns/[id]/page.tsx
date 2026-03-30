@@ -69,7 +69,8 @@ export default function CampaignDetailPage() {
   const openEditVariant = (v: Variant) => {
     setEditingVariant(v.id);
     setEditName(v.name);
-    setEditCta(v.cta_url || "");
+    const varCf = (v.custom_fields || {}) as Record<string, string>;
+    setEditCta(v.cta_url || varCf.CTA_URL || "");
     setEditWeight(v.traffic_weight);
     const cf = (v.custom_fields || {}) as Record<string, string>;
     setEditVars({ ...cf });
@@ -250,8 +251,8 @@ export default function CampaignDetailPage() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 12, fontSize: 12 }}>
                     <div>
                       <div style={{ color: "#555", fontSize: 10, marginBottom: 1 }}>CTA URL</div>
-                      <div style={{ color: v.cta_url ? "#8b8ba0" : "#555", fontFamily: "monospace", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 280 }}>
-                        {v.cta_url || "Not set"}
+                      <div style={{ color: (v.cta_url || cf.CTA_URL) ? "#8b8ba0" : "#555", fontFamily: "monospace", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 280 }}>
+                        {v.cta_url || cf.CTA_URL || "Not set"}
                       </div>
                     </div>
                     <div style={{ textAlign: "right" }}>
