@@ -8,25 +8,21 @@ import { type Lander } from "@/lib/types";
 export default function NewCampaignPage() {
   const router = useRouter();
   const [landers, setLanders] = useState<Lander[]>([]);
-  const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [previewLander, setPreviewLander] = useState<Lander | null>(null);
 
-  // Step 1
+  // Campaign fields
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [operator, setOperator] = useState("");
   const [geo, setGeo] = useState("");
   const [source, setSource] = useState("");
-
-  // Step 2
   const [landerId, setLanderId] = useState<string | null>(null);
-
-  // Step 3 - variants
-  const [varA, setVarA] = useState<Record<string, string>>({});
-  const [varB, setVarB] = useState<Record<string, string>>({});
+  const [ctaUrl, setCtaUrl] = useState("");
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
 
   const selectedLander = landers.find((l) => l.id === landerId);
-  const variables = selectedLander?.variables || [];
+  const variables = (selectedLander?.variables || []).filter((v: string) => v !== "CTA_URL");
 
   useEffect(() => {
     async function load() {
@@ -41,31 +37,24 @@ export default function NewCampaignPage() {
     setSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
   }, [name]);
 
-  // Pre-fill defaults when lander is selected
   useEffect(() => {
     if (selectedLander?.defaults) {
-      setVarA({ ...selectedLander.defaults });
-      setVarB({ ...selectedLander.defaults });
+      setOverrides({ ...selectedLander.defaults });
     }
   }, [landerId, selectedLander?.defaults]);
 
   const handleCreate = async (activate: boolean) => {
+    if (!name || !slug || !landerId) return;
     setSaving(true);
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
-    const { data: campaign, error } = await supabase
-      .from("campaigns")
-      .insert({
-        name, slug, operator: operator || null, geo: geo || null,
-        traffic_source: source || null,
-        template: null,
-        lander_id: landerId || null,
-        status: activate ? "active" : "draft",
-        created_by: user?.id || null,
-      })
-      .select("id")
-      .single();
+    const { data: campaign, error } = await supabase.from("campaigns").insert({
+      name, slug, operator: operator || null, geo: geo || null,
+      traffic_source: source || null, template: null,
+      lander_id: landerId, status: activate ? "active" : "draft",
+      created_by: user?.id || null,
+    }).select("id").single();
 
     if (error || !campaign) {
       alert("Error: " + (error?.message || "Unknown"));
@@ -73,186 +62,210 @@ export default function NewCampaignPage() {
       return;
     }
 
-    // Create variants with variable values in custom_fields
-    const variants = [
-      { name: "Control", traffic_weight: 50, is_control: true, custom_fields: varA,
-        cta_url: varA.CTA_URL || null, headline: varA.HEADLINE || null, subheadline: varA.SUBHEADLINE || null,
-        cta_text: varA.CTA_TEXT || null, cta_color: varA.CTA_COLOR || null },
-      { name: "Variant B", traffic_weight: 50, is_control: false, custom_fields: varB,
-        cta_url: varB.CTA_URL || null, headline: varB.HEADLINE || null, subheadline: varB.SUBHEADLINE || null,
-        cta_text: varB.CTA_TEXT || null, cta_color: varB.CTA_COLOR || null },
-    ];
-
-    for (const v of variants) {
-      await supabase.from("variants").insert({ ...v, campaign_id: campaign.id });
-    }
+    // Create single default variant with the CTA + overrides
+    await supabase.from("variants").insert({
+      campaign_id: campaign.id,
+      name: "Default",
+      traffic_weight: 100,
+      is_control: true,
+      cta_url: ctaUrl || null,
+      custom_fields: { ...overrides, CTA_URL: ctaUrl },
+    });
 
     router.push(`/campaigns/${campaign.id}`);
   };
 
   const input: React.CSSProperties = {
-    width: "100%", padding: "8px 12px", background: "#16161e", border: "1px solid #1e1e2e",
-    borderRadius: 6, color: "#e4e4f0", fontSize: 13, boxSizing: "border-box",
+    width: "100%", padding: "8px 12px", background: "#13131b", border: "1px solid #1e1e2e",
+    borderRadius: 6, color: "#e4e4f0", fontSize: 13, boxSizing: "border-box", outline: "none",
   };
   const label: React.CSSProperties = { display: "block", fontSize: 11, fontWeight: 500, color: "#6b6b80", marginBottom: 4 };
+  const section: React.CSSProperties = { background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", padding: 16, marginBottom: 12 };
+  const sectionTitle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: "#e4e4f0", margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 };
 
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 20, fontWeight: 600, color: "#e4e4f0", marginBottom: 20 }}>New Campaign</h1>
-
-      {/* Steps */}
-      <div style={{ display: "flex", gap: 2, marginBottom: 24 }}>
-        {["Details", "Lander", "Variants"].map((s, i) => (
-          <div key={s} style={{
-            flex: 1, padding: "7px 0", textAlign: "center", borderRadius: 4,
-            background: step === i + 1 ? "#6366f1" : step > i + 1 ? "#1a1a2e" : "#111118",
-            color: step === i + 1 ? "#fff" : step > i + 1 ? "#6366f1" : "#555",
-            fontSize: 12, fontWeight: 500,
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#e4e4f0", margin: 0 }}>New Campaign</h1>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => handleCreate(false)} disabled={saving || !name || !slug || !landerId} style={{
+            padding: "7px 16px", background: "#1e1e2e", color: "#e4e4f0",
+            border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer",
+            opacity: !name || !slug || !landerId ? 0.4 : 1,
           }}>
-            {i + 1}. {s}
-          </div>
-        ))}
+            Save Draft
+          </button>
+          <button onClick={() => handleCreate(true)} disabled={saving || !name || !slug || !landerId} style={{
+            padding: "7px 18px", background: !name || !slug || !landerId ? "#2a2a3a" : "#6366f1",
+            color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 500,
+            cursor: !name || !slug || !landerId ? "not-allowed" : "pointer",
+            opacity: saving ? 0.7 : 1,
+          }}>
+            {saving ? "Creating..." : "Create & Activate"}
+          </button>
+        </div>
       </div>
 
-      {/* Step 1: Details */}
-      {step === 1 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div>
-            <label style={label}>Campaign Name *</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} style={input} placeholder="e.g. Bahigo Casino TR" />
-          </div>
-          <div>
-            <label style={label}>Slug</label>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12, color: "#555" }}>/lp/</span>
-              <input value={slug} onChange={(e) => setSlug(e.target.value)} style={{ ...input, flex: 1 }} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 16 }}>
+        {/* Left column */}
+        <div>
+          {/* Campaign Details */}
+          <div style={section}>
+            <h2 style={sectionTitle}>
+              <span style={{ width: 20, height: 20, borderRadius: 4, background: "#6366f120", color: "#6366f1", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>1</span>
+              Campaign Details
+            </h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div>
+                <label style={label}>Campaign Name *</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} style={input} placeholder="e.g. Bahigo Casino TR" />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "#555", padding: "0 4px" }}>/lp/</span>
+                <input value={slug} onChange={(e) => setSlug(e.target.value)} style={input} placeholder="bahigo-casino-tr" />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div><label style={label}>Operator</label><input value={operator} onChange={(e) => setOperator(e.target.value)} style={input} placeholder="Bahigo" /></div>
+                <div><label style={label}>GEO</label><input value={geo} onChange={(e) => setGeo(e.target.value)} style={input} placeholder="TR" /></div>
+                <div><label style={label}>Source</label><input value={source} onChange={(e) => setSource(e.target.value)} style={input} placeholder="propellerads" /></div>
+              </div>
             </div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            <div><label style={label}>Operator</label><input value={operator} onChange={(e) => setOperator(e.target.value)} style={input} placeholder="Bahigo" /></div>
-            <div><label style={label}>GEO</label><input value={geo} onChange={(e) => setGeo(e.target.value)} style={input} placeholder="TR" /></div>
-            <div><label style={label}>Traffic Source</label><input value={source} onChange={(e) => setSource(e.target.value)} style={input} placeholder="propellerads" /></div>
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-            <button onClick={() => setStep(2)} disabled={!name || !slug} style={{
-              padding: "8px 20px", background: name && slug ? "#6366f1" : "#333",
-              color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 500,
-              cursor: name && slug ? "pointer" : "not-allowed",
-            }}>
-              Next
-            </button>
-          </div>
-        </div>
-      )}
 
-      {/* Step 2: Pick Lander */}
-      {step === 2 && (
-        <div>
-          <p style={{ fontSize: 12, color: "#6b6b80", marginBottom: 14 }}>
-            Select a lander from your repository. Each variant will use this lander with different variable values.
-          </p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10, marginBottom: 20 }}>
-            {landers.map((l) => {
-              const isSelected = landerId === l.id;
-              const vars = Array.isArray(l.variables) ? l.variables : [];
-              return (
-                <div
-                  key={l.id}
-                  onClick={() => setLanderId(l.id)}
-                  style={{
-                    background: "#111118", borderRadius: 8, padding: 14, cursor: "pointer",
-                    border: `2px solid ${isSelected ? "#6366f1" : "#1e1e2e"}`,
-                    transition: "border-color 0.1s",
-                  }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#e4e4f0", marginBottom: 4 }}>{l.name}</div>
-                  <div style={{ fontSize: 11, color: "#6b6b80", marginBottom: 6 }}>{l.notes || "No description"}</div>
-                  <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                    {vars.slice(0, 4).map((v: string) => (
-                      <span key={v} style={{ padding: "1px 5px", background: "#1e1e2e", borderRadius: 3, fontSize: 10, color: "#8b8ba0", fontFamily: "monospace" }}>
-                        {v}
-                      </span>
-                    ))}
-                    {vars.length > 4 && <span style={{ fontSize: 10, color: "#555" }}>+{vars.length - 4}</span>}
-                  </div>
-                </div>
-              );
-            })}
+          {/* Select Lander */}
+          <div style={section}>
+            <h2 style={sectionTitle}>
+              <span style={{ width: 20, height: 20, borderRadius: 4, background: "#6366f120", color: "#6366f1", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>2</span>
+              Select Lander
+            </h2>
+            {landers.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 24, color: "#555", border: "1px dashed #1e1e2e", borderRadius: 8 }}>
+                No landers uploaded. <a href="/landers/upload" style={{ color: "#6366f1", textDecoration: "none" }}>Upload one first</a>.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
+                {landers.map((l) => {
+                  const isSelected = landerId === l.id;
+                  return (
+                    <div key={l.id} onClick={() => setLanderId(l.id)} style={{
+                      padding: "10px 12px", borderRadius: 6, cursor: "pointer",
+                      border: `2px solid ${isSelected ? "#6366f1" : "#1e1e2e"}`,
+                      background: isSelected ? "#6366f108" : "#16161e",
+                      transition: "all 0.1s",
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: isSelected ? "#e4e4f0" : "#8b8ba0", marginBottom: 2 }}>{l.name}</div>
+                      <div style={{ fontSize: 10, color: "#555" }}>{l.notes || "—"}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {selectedLander && (
+              <button
+                onClick={() => setPreviewLander(previewLander ? null : selectedLander)}
+                style={{ marginTop: 8, padding: "5px 12px", background: "#1e1e2e", color: "#8b8ba0", border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer" }}
+              >
+                {previewLander ? "Hide Preview" : "Preview Lander"}
+              </button>
+            )}
           </div>
-          {landers.length === 0 && (
-            <div style={{ textAlign: "center", padding: 32, background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", color: "#6b6b80", fontSize: 13 }}>
-              No landers uploaded yet. <a href="/landers/upload" style={{ color: "#6366f1" }}>Upload one first</a>.
+
+          {/* CTA Configuration */}
+          <div style={{ ...section, borderColor: "#6366f130" }}>
+            <h2 style={sectionTitle}>
+              <span style={{ width: 20, height: 20, borderRadius: 4, background: "#6366f120", color: "#6366f1", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>3</span>
+              CTA / Offer Link
+            </h2>
+            <div>
+              <label style={label}>Destination URL (where the CTA button sends traffic) *</label>
+              <input
+                value={ctaUrl}
+                onChange={(e) => setCtaUrl(e.target.value)}
+                style={{ ...input, borderColor: ctaUrl ? "#6366f140" : "#1e1e2e" }}
+                placeholder="https://bahigo.com/register?btag=AFFTAG"
+              />
+              <p style={{ fontSize: 11, color: "#555", margin: "6px 0 0" }}>
+                Click tracking is auto-injected. Your lander&apos;s {"{{CTA_URL}}"} will be replaced with a tracked redirect URL.
+              </p>
+            </div>
+          </div>
+
+          {/* Variable Overrides */}
+          {variables.length > 0 && (
+            <div style={section}>
+              <h2 style={sectionTitle}>
+                <span style={{ width: 20, height: 20, borderRadius: 4, background: "#6366f120", color: "#6366f1", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>4</span>
+                Lander Variables
+              </h2>
+              <p style={{ fontSize: 11, color: "#555", margin: "0 0 10px" }}>
+                Customize the lander content. You can create variants with different values later from the campaign page.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {variables.map((v: string) => (
+                  <div key={v}>
+                    <label style={{ fontSize: 10, color: "#6366f1", fontFamily: "monospace", display: "block", marginBottom: 3 }}>{`{{${v}}}`}</label>
+                    <input
+                      value={overrides[v] || ""}
+                      onChange={(e) => setOverrides({ ...overrides, [v]: e.target.value })}
+                      style={{ ...input, fontSize: 12 }}
+                      placeholder={selectedLander?.defaults?.[v] || ""}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-            <button onClick={() => setStep(1)} style={{ padding: "8px 16px", background: "transparent", color: "#6b6b80", border: "1px solid #1e1e2e", borderRadius: 6, fontSize: 13, cursor: "pointer" }}>
-              Back
-            </button>
-            <button onClick={() => setStep(3)} disabled={!landerId} style={{
-              padding: "8px 20px", background: landerId ? "#6366f1" : "#333",
-              color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 500,
-              cursor: landerId ? "pointer" : "not-allowed",
-            }}>
-              Next
-            </button>
-          </div>
         </div>
-      )}
 
-      {/* Step 3: Variants */}
-      {step === 3 && (
+        {/* Right column — Preview */}
         <div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
-            {[
-              { label: "Control (A)", data: varA, setData: setVarA },
-              { label: "Variant B", data: varB, setData: setVarB },
-            ].map(({ label: vLabel, data, setData }) => (
-              <div key={vLabel} style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", padding: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#e4e4f0", marginBottom: 12 }}>{vLabel}</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {variables.map((v: string) => (
-                    <div key={v}>
-                      <label style={{ fontSize: 10, color: "#6b6b80", fontFamily: "monospace", display: "block", marginBottom: 2 }}>
-                        {`{{${v}}}`}
-                      </label>
-                      <input
-                        value={data[v] || ""}
-                        onChange={(e) => setData({ ...data, [v]: e.target.value })}
-                        style={{ ...input, fontSize: 12 }}
-                        placeholder={selectedLander?.defaults?.[v] || ""}
-                      />
-                    </div>
-                  ))}
-                  {variables.length === 0 && (
-                    <p style={{ fontSize: 12, color: "#555", margin: 0 }}>This lander has no variables. The same content will show for both variants.</p>
-                  )}
+          <div style={{ position: "sticky", top: 20 }}>
+            {previewLander ? (
+              <div style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", overflow: "hidden" }}>
+                <div style={{ padding: "8px 12px", borderBottom: "1px solid #1e1e2e", fontSize: 11, color: "#6b6b80" }}>
+                  Lander Preview — {previewLander.name}
                 </div>
+                <iframe
+                  srcDoc={previewLander.html}
+                  style={{ width: "100%", height: 550, border: "none", display: "block" }}
+                  sandbox="allow-same-origin allow-scripts"
+                  title="Preview"
+                />
               </div>
-            ))}
-          </div>
+            ) : (
+              <div style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", padding: 20 }}>
+                <h3 style={{ fontSize: 13, fontWeight: 500, color: "#8b8ba0", margin: "0 0 12px" }}>Summary</h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12 }}>
+                  <Row label="Name" value={name || "—"} />
+                  <Row label="Slug" value={slug ? `/lp/${slug}` : "—"} />
+                  <Row label="Operator" value={operator || "—"} />
+                  <Row label="GEO" value={geo || "—"} />
+                  <Row label="Source" value={source || "—"} />
+                  <Row label="Lander" value={selectedLander?.name || "Not selected"} highlight={!!selectedLander} />
+                  <Row label="CTA URL" value={ctaUrl ? ctaUrl.substring(0, 40) + (ctaUrl.length > 40 ? "..." : "") : "Not set"} highlight={!!ctaUrl} />
+                  <Row label="Variables" value={`${variables.length} customizable`} />
+                </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <button onClick={() => setStep(2)} style={{ padding: "8px 16px", background: "transparent", color: "#6b6b80", border: "1px solid #1e1e2e", borderRadius: 6, fontSize: 13, cursor: "pointer" }}>
-              Back
-            </button>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => handleCreate(false)} disabled={saving} style={{
-                padding: "8px 16px", background: "#1e1e2e", color: "#e4e4f0",
-                border: "none", borderRadius: 6, fontSize: 13, cursor: "pointer",
-              }}>
-                Save Draft
-              </button>
-              <button onClick={() => handleCreate(true)} disabled={saving} style={{
-                padding: "8px 20px", background: "#6366f1", color: "#fff",
-                border: "none", borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: "pointer",
-                opacity: saving ? 0.7 : 1,
-              }}>
-                {saving ? "Creating..." : "Create & Activate"}
-              </button>
-            </div>
+                {(!name || !slug || !landerId) && (
+                  <div style={{ marginTop: 16, padding: 10, background: "#eab30810", border: "1px solid #eab30820", borderRadius: 6, fontSize: 11, color: "#eab308" }}>
+                    {!name && <div>Campaign name required</div>}
+                    {!landerId && <div>Select a lander</div>}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between" }}>
+      <span style={{ color: "#6b6b80" }}>{label}</span>
+      <span style={{ color: highlight ? "#6366f1" : "#8b8ba0", fontWeight: highlight ? 500 : 400, textAlign: "right", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
     </div>
   );
 }
