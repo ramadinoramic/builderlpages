@@ -6,6 +6,7 @@ const templates: Record<string, ComponentType<LPTemplateProps>> = {
   "casino-v1": dynamic(() => import("./CasinoV1")),
   "sports-v1": dynamic(() => import("./SportsV1")),
   "casino-v2": dynamic(() => import("./CasinoV2")),
+  "custom-builder": dynamic(() => import("./CustomBuilder")),
 };
 
 export function getTemplateComponent(templateId: string): ComponentType<LPTemplateProps> | null {

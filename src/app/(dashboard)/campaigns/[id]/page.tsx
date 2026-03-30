@@ -8,7 +8,8 @@ import VariantEditor from "@/components/dashboard/VariantEditor";
 import TrafficSplitSlider from "@/components/dashboard/TrafficSplitSlider";
 import StatsChart from "@/components/dashboard/StatsChart";
 import { type Campaign, type Variant, type CampaignStats, type EditableField } from "@/lib/types";
-import { Copy, ExternalLink, Plus, Trophy } from "lucide-react";
+import { Copy, ExternalLink, Plus, Trophy, Paintbrush } from "lucide-react";
+import Link from "next/link";
 
 export default function CampaignDetailPage() {
   const params = useParams();
@@ -196,6 +197,13 @@ export default function CampaignDetailPage() {
           }}>
             <Copy size={14} /> Duplicate
           </button>
+          <Link href={`/campaigns/${campaignId}/builder`} style={{
+            padding: "8px 16px", background: "linear-gradient(135deg, #00ca6b, #0ea5e9)",
+            color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13,
+            textDecoration: "none", display: "flex", alignItems: "center", gap: 6,
+          }}>
+            <Paintbrush size={14} /> Visual Builder
+          </Link>
           <a href={`/lp/${campaign.slug}`} target="_blank" rel="noopener noreferrer" style={{
             padding: "8px 16px", background: "#242438", color: "#8888aa",
             border: "1px solid #2a2a40", borderRadius: 8, fontWeight: 500, fontSize: 13,
