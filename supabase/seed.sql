@@ -28,7 +28,7 @@ VALUES (
 INSERT INTO variants (id, campaign_id, name, traffic_weight, is_control, status, headline, subheadline, cta_text, cta_subtext, cta_color, cta_url, steps, payment_methods)
 VALUES
 (
-  'v1111111-1111-1111-1111-111111111111',
+  'b1a11111-1111-1111-1111-111111111111',
   'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   'Control',
   50,
@@ -44,7 +44,7 @@ VALUES
   '["Papara", "PayFix", "Kredi Kartı", "EFT"]'
 ),
 (
-  'v2222222-2222-2222-2222-222222222222',
+  'b2a22222-2222-2222-2222-222222222222',
   'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   'Variant B - Higher Bonus',
   50,
@@ -67,8 +67,8 @@ SELECT
   'clk_' || substr(md5(random()::text), 1, 8),
   'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   CASE WHEN random() > 0.5
-    THEN 'v1111111-1111-1111-1111-111111111111'::uuid
-    ELSE 'v2222222-2222-2222-2222-222222222222'::uuid
+    THEN 'b1a11111-1111-1111-1111-111111111111'::uuid
+    ELSE 'b2a22222-2222-2222-2222-222222222222'::uuid
   END,
   '185.1.' || floor(random()*255) || '.' || floor(random()*255),
   'Mozilla/5.0',
