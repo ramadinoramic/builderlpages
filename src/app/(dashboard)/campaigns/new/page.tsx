@@ -59,7 +59,7 @@ export default function NewCampaignPage() {
       .insert({
         name, slug, operator: operator || null, geo: geo || null,
         traffic_source: source || null,
-        template: landerId ? "lander-repo" : "casino-v1",
+        template: null,
         lander_id: landerId || null,
         status: activate ? "active" : "draft",
         created_by: user?.id || null,
