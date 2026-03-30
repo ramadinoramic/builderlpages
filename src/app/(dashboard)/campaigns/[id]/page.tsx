@@ -3,13 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import StatusBadge from "@/components/dashboard/StatusBadge";
-import VariantEditor from "@/components/dashboard/VariantEditor";
-import TrafficSplitSlider from "@/components/dashboard/TrafficSplitSlider";
+import { type Campaign, type Variant, type CampaignStats, type Lander } from "@/lib/types";
 import StatsChart from "@/components/dashboard/StatsChart";
-import { type Campaign, type Variant, type CampaignStats, type EditableField } from "@/lib/types";
-import { Copy, ExternalLink, Plus, Trophy, Paintbrush } from "lucide-react";
-import Link from "next/link";
 
 export default function CampaignDetailPage() {
   const params = useParams();
@@ -20,44 +15,35 @@ export default function CampaignDetailPage() {
   const [variants, setVariants] = useState<Variant[]>([]);
   const [stats, setStats] = useState<CampaignStats[]>([]);
   const [dailyData, setDailyData] = useState<Record<string, Record<string, { clicks: number; conversions: number; payout: number }>>>({});
-  const [editableFields, setEditableFields] = useState<EditableField[]>([]);
-  const [editingVariant, setEditingVariant] = useState<Variant | null>(null);
+  const [lander, setLander] = useState<Lander | null>(null);
+  const [editingVariant, setEditingVariant] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const loadData = useCallback(async () => {
     const supabase = createClient();
-
-    const [campaignRes, variantsRes, statsRes] = await Promise.all([
+    const [cRes, vRes, sRes] = await Promise.all([
       supabase.from("campaigns").select("*").eq("id", campaignId).single(),
       supabase.from("variants").select("*").eq("campaign_id", campaignId).order("is_control", { ascending: false }),
       supabase.from("campaign_stats").select("*").eq("campaign_id", campaignId),
     ]);
 
-    if (campaignRes.data) {
-      setCampaign(campaignRes.data as Campaign);
-      // Load template's editable fields
-      const { data: template } = await supabase
-        .from("templates")
-        .select("editable_fields")
-        .eq("id", campaignRes.data.template)
-        .single();
-      if (template) {
-        const fields = typeof template.editable_fields === "string"
-          ? JSON.parse(template.editable_fields)
-          : template.editable_fields;
-        setEditableFields(fields);
+    if (cRes.data) {
+      setCampaign(cRes.data as Campaign);
+      if (cRes.data.lander_id) {
+        const { data: l } = await supabase.from("landers").select("*").eq("id", cRes.data.lander_id).single();
+        if (l) setLander(l as Lander);
       }
     }
-    if (variantsRes.data) setVariants(variantsRes.data as Variant[]);
-    if (statsRes.data) setStats(statsRes.data as CampaignStats[]);
+    if (vRes.data) setVariants(vRes.data as Variant[]);
+    if (sRes.data) setStats(sRes.data as CampaignStats[]);
 
-    // Load daily data
     const res = await fetch(`/api/campaigns/${campaignId}/stats`);
     if (res.ok) {
       const data = await res.json();
       setDailyData(data.daily || {});
     }
-
     setLoading(false);
   }, [campaignId]);
 
@@ -71,37 +57,56 @@ export default function CampaignDetailPage() {
     setCampaign({ ...campaign, status: newStatus });
   };
 
+  const saveVariant = async (variantId: string) => {
+    setSaving(true);
+    const supabase = createClient();
+    const v = variants.find((x) => x.id === variantId);
+    if (!v) return;
+
+    // Separate standard fields from custom variables
+    const { CTA_URL, HEADLINE, SUBHEADLINE, CTA_TEXT, CTA_COLOR, HERO_IMAGE, BODY_TEXT } = editValues;
+
+    await supabase.from("variants").update({
+      cta_url: CTA_URL ?? v.cta_url,
+      headline: HEADLINE ?? v.headline,
+      subheadline: SUBHEADLINE ?? v.subheadline,
+      cta_text: CTA_TEXT ?? v.cta_text,
+      cta_color: CTA_COLOR ?? v.cta_color,
+      hero_image_url: HERO_IMAGE ?? v.hero_image_url,
+      body_text: BODY_TEXT ?? v.body_text,
+      custom_fields: { ...(v.custom_fields as Record<string, string>), ...editValues },
+    }).eq("id", variantId);
+
+    setEditingVariant(null);
+    setSaving(false);
+    loadData();
+  };
+
+  const updateWeight = async (variantId: string, weight: number) => {
+    const supabase = createClient();
+    await supabase.from("variants").update({ traffic_weight: weight }).eq("id", variantId);
+    setVariants((prev) => prev.map((v) => v.id === variantId ? { ...v, traffic_weight: weight } : v));
+  };
+
   const addVariant = async () => {
     const supabase = createClient();
-    const { data } = await supabase
-      .from("variants")
-      .insert({
-        campaign_id: campaignId,
-        name: `Variant ${String.fromCharCode(65 + variants.length)}`,
-        traffic_weight: 0,
-        is_control: false,
-        headline: variants[0]?.headline || "",
-        subheadline: variants[0]?.subheadline || "",
-        cta_text: variants[0]?.cta_text || "",
-        cta_subtext: variants[0]?.cta_subtext || "",
-        cta_color: variants[0]?.cta_color || "#00ca6b",
-        cta_url: variants[0]?.cta_url || "",
-      })
-      .select()
-      .single();
+    const { data } = await supabase.from("variants").insert({
+      campaign_id: campaignId,
+      name: `Variant ${String.fromCharCode(65 + variants.length)}`,
+      traffic_weight: 0,
+      is_control: false,
+      custom_fields: lander?.defaults || {},
+    }).select().single();
     if (data) setVariants([...variants, data as Variant]);
   };
 
   const declareWinner = async (winnerId: string) => {
     const supabase = createClient();
     for (const v of variants) {
-      await supabase
-        .from("variants")
-        .update({
-          traffic_weight: v.id === winnerId ? 100 : 0,
-          status: v.id === winnerId ? "active" : "paused",
-        })
-        .eq("id", v.id);
+      await supabase.from("variants").update({
+        traffic_weight: v.id === winnerId ? 100 : 0,
+        status: v.id === winnerId ? "active" : "paused",
+      }).eq("id", v.id);
     }
     loadData();
   };
@@ -109,254 +114,241 @@ export default function CampaignDetailPage() {
   const duplicateCampaign = async () => {
     if (!campaign) return;
     const supabase = createClient();
-    const { data: newCampaign } = await supabase
-      .from("campaigns")
-      .insert({
-        name: `${campaign.name} (Copy)`,
-        slug: `${campaign.slug}-copy-${Date.now().toString(36)}`,
-        status: "draft",
-        template: campaign.template,
-        geo: campaign.geo,
-        operator: campaign.operator,
-        traffic_source: campaign.traffic_source,
-        notes: campaign.notes,
-      })
-      .select()
-      .single();
-
-    if (newCampaign) {
+    const { data: nc } = await supabase.from("campaigns").insert({
+      name: `${campaign.name} (Copy)`,
+      slug: `${campaign.slug}-${Date.now().toString(36)}`,
+      status: "draft", template: campaign.template, lander_id: campaign.lander_id,
+      geo: campaign.geo, operator: campaign.operator, traffic_source: campaign.traffic_source,
+    }).select().single();
+    if (nc) {
       for (const v of variants) {
         await supabase.from("variants").insert({
-          campaign_id: newCampaign.id,
-          name: v.name,
-          traffic_weight: v.traffic_weight,
-          is_control: v.is_control,
-          headline: v.headline,
-          subheadline: v.subheadline,
-          cta_text: v.cta_text,
-          cta_subtext: v.cta_subtext,
-          cta_color: v.cta_color,
-          cta_url: v.cta_url,
-          hero_image_url: v.hero_image_url,
-          body_text: v.body_text,
-          steps: v.steps,
-          payment_methods: v.payment_methods,
-          custom_css: v.custom_css,
+          campaign_id: nc.id, name: v.name, traffic_weight: v.traffic_weight,
+          is_control: v.is_control, cta_url: v.cta_url, headline: v.headline,
+          subheadline: v.subheadline, cta_text: v.cta_text, cta_color: v.cta_color,
           custom_fields: v.custom_fields,
         });
       }
-      router.push(`/campaigns/${newCampaign.id}`);
+      router.push(`/campaigns/${nc.id}`);
     }
   };
 
-  if (loading) {
-    return <div style={{ padding: 48, textAlign: "center", color: "#666688" }}>Loading...</div>;
-  }
+  if (loading) return <div style={{ padding: 40, color: "#6b6b80" }}>Loading...</div>;
+  if (!campaign) return <div style={{ padding: 40, color: "#6b6b80" }}>Campaign not found</div>;
 
-  if (!campaign) {
-    return <div style={{ padding: 48, textAlign: "center", color: "#666688" }}>Campaign not found</div>;
-  }
-
-  // Aggregate totals
   const totalClicks = stats.reduce((s, st) => s + Number(st.clicks), 0);
-  const totalConversions = stats.reduce((s, st) => s + Number(st.conversions), 0);
-  const overallCR = totalClicks > 0 ? Math.round((totalConversions / totalClicks) * 10000) / 100 : 0;
+  const totalConv = stats.reduce((s, st) => s + Number(st.conversions), 0);
   const totalPayout = stats.reduce((s, st) => s + Number(st.total_payout), 0);
-
-  // Find best performing variant
-  const bestVariant = stats.length > 0
-    ? stats.reduce((best, s) => Number(s.conversion_rate) > Number(best.conversion_rate) ? s : best)
-    : null;
+  const overallCR = totalClicks > 0 ? (totalConv / totalClicks * 100).toFixed(2) : "0.00";
+  const statusColor = campaign.status === "active" ? "#22c55e" : campaign.status === "paused" ? "#eab308" : "#6b6b80";
+  const landerVars = lander?.variables || [];
 
   return (
     <div>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, color: "#fff", margin: "0 0 8px" }}>{campaign.name}</h1>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <StatusBadge status={campaign.status} />
-            {campaign.geo && <span style={{ padding: "4px 8px", borderRadius: 6, fontSize: 11, background: "#242438", color: "#8888aa" }}>{campaign.geo}</span>}
-            {campaign.operator && <span style={{ padding: "4px 8px", borderRadius: 6, fontSize: 11, background: "#242438", color: "#8888aa" }}>{campaign.operator}</span>}
-            <span style={{ padding: "4px 8px", borderRadius: 6, fontSize: 11, background: "#242438", color: "#666688" }}>/lp/{campaign.slug}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 600, color: "#e4e4f0", margin: 0 }}>{campaign.name}</h1>
+            <span style={{ fontSize: 11, color: statusColor, fontWeight: 500, background: `${statusColor}15`, padding: "2px 8px", borderRadius: 4 }}>
+              {campaign.status}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, fontSize: 12, color: "#6b6b80" }}>
+            {campaign.geo && <span>{campaign.geo}</span>}
+            {campaign.operator && <span>&middot; {campaign.operator}</span>}
+            <span>&middot; /lp/{campaign.slug}</span>
+            {lander && <span>&middot; Lander: {lander.name}</span>}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6 }}>
           <button onClick={toggleStatus} style={{
-            padding: "8px 16px", background: campaign.status === "active" ? "#2e2a0a" : "#0a2e1a",
-            color: campaign.status === "active" ? "#caa000" : "#00ca6b",
-            border: "1px solid " + (campaign.status === "active" ? "#5a4a0a" : "#0a5a2a"),
-            borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: "pointer",
+            padding: "6px 14px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+            background: "transparent", color: campaign.status === "active" ? "#eab308" : "#22c55e",
+            border: `1px solid ${campaign.status === "active" ? "#eab30830" : "#22c55e30"}`,
           }}>
             {campaign.status === "active" ? "Pause" : "Activate"}
           </button>
           <button onClick={duplicateCampaign} style={{
-            padding: "8px 16px", background: "#242438", color: "#8888aa",
-            border: "1px solid #2a2a40", borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: "pointer",
-            display: "flex", alignItems: "center", gap: 6,
+            padding: "6px 14px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+            background: "transparent", color: "#6b6b80", border: "1px solid #1e1e2e",
           }}>
-            <Copy size={14} /> Duplicate
+            Duplicate
           </button>
-          <Link href={`/campaigns/${campaignId}/builder`} style={{
-            padding: "8px 16px", background: "linear-gradient(135deg, #00ca6b, #0ea5e9)",
-            color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13,
-            textDecoration: "none", display: "flex", alignItems: "center", gap: 6,
-          }}>
-            <Paintbrush size={14} /> Visual Builder
-          </Link>
           <a href={`/lp/${campaign.slug}`} target="_blank" rel="noopener noreferrer" style={{
-            padding: "8px 16px", background: "#242438", color: "#8888aa",
-            border: "1px solid #2a2a40", borderRadius: 8, fontWeight: 500, fontSize: 13,
-            textDecoration: "none", display: "flex", alignItems: "center", gap: 6,
+            padding: "6px 14px", fontSize: 12, borderRadius: 6,
+            background: "transparent", color: "#6b6b80", border: "1px solid #1e1e2e",
+            textDecoration: "none",
           }}>
-            <ExternalLink size={14} /> View LP
+            Open LP
           </a>
         </div>
       </div>
 
-      {/* Quick Stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: 24 }}>
+      {/* Quick stats */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 20 }}>
         {[
-          { label: "Total Clicks", value: totalClicks.toLocaleString() },
-          { label: "Total Conversions", value: totalConversions.toLocaleString() },
-          { label: "Overall CR", value: `${overallCR}%`, color: "#00ca6b" },
-          { label: "Total Payout", value: `$${totalPayout.toLocaleString()}` },
+          { label: "Clicks", value: totalClicks.toLocaleString() },
+          { label: "Conversions", value: totalConv.toLocaleString() },
+          { label: "CR", value: `${overallCR}%`, highlight: true },
+          { label: "Revenue", value: `$${totalPayout.toLocaleString()}` },
         ].map((s) => (
-          <div key={s.label} style={{ background: "#1a1a2e", borderRadius: 10, padding: 14, border: "1px solid #2a2a40" }}>
-            <div style={{ fontSize: 11, color: "#666688", marginBottom: 2 }}>{s.label}</div>
-            <div className="stat-number" style={{ fontSize: 20, fontWeight: 700, color: s.color || "#fff" }}>{s.value}</div>
+          <div key={s.label} style={{ background: "#111118", borderRadius: 8, padding: "10px 14px", border: "1px solid #1e1e2e" }}>
+            <div style={{ fontSize: 11, color: "#6b6b80" }}>{s.label}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: s.highlight ? "#6366f1" : "#e4e4f0", fontFamily: "monospace" }}>{s.value}</div>
           </div>
         ))}
       </div>
 
       {/* Variants */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, marginBottom: 24 }}>
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: "#fff", margin: 0 }}>Variants</h2>
-            <button onClick={addVariant} style={{
-              padding: "6px 12px", background: "#242438", color: "#8888aa",
-              border: "1px solid #2a2a40", borderRadius: 6, fontSize: 12, cursor: "pointer",
-              display: "flex", alignItems: "center", gap: 4,
-            }}>
-              <Plus size={14} /> Add Variant
-            </button>
-          </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <h2 style={{ fontSize: 14, fontWeight: 500, color: "#6b6b80", margin: 0 }}>Variants</h2>
+        <button onClick={addVariant} style={{
+          padding: "5px 12px", background: "#1e1e2e", color: "#8b8ba0",
+          border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer",
+        }}>
+          + Add Variant
+        </button>
+      </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", overflow: "hidden", marginBottom: 20 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #1e1e2e" }}>
+              {["Variant", "Weight", "Clicks", "Conv.", "CR", "Revenue", ""].map((h) => (
+                <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontSize: 11, fontWeight: 500, color: "#6b6b80", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
             {variants.map((v) => {
-              const vStats = stats.find((s) => s.variant_id === v.id);
-              const isWinner = bestVariant && bestVariant.variant_id === v.id && Number(bestVariant.clicks) > 10;
+              const vs = stats.find((s) => s.variant_id === v.id);
+              const vCR = vs && Number(vs.clicks) > 0 ? (Number(vs.conversions) / Number(vs.clicks) * 100).toFixed(2) : "0.00";
               return (
-                <div key={v.id} style={{
-                  background: "#1a1a2e", borderRadius: 10, padding: 16,
-                  border: `1px solid ${isWinner ? "#00ca6b40" : "#2a2a40"}`,
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontWeight: 600, color: "#fff", fontSize: 14 }}>{v.name}</span>
-                      {v.is_control && <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#242438", color: "#8888aa" }}>Control</span>}
-                      {isWinner && <Trophy size={14} style={{ color: "#00ca6b" }} />}
+                <tr key={v.id} style={{ borderBottom: "1px solid #1e1e2e" }}>
+                  <td style={{ padding: "8px 14px" }}>
+                    <span style={{ color: "#e4e4f0", fontSize: 13, fontWeight: 500 }}>{v.name}</span>
+                    {v.is_control && <span style={{ fontSize: 10, color: "#6b6b80", marginLeft: 6 }}>control</span>}
+                  </td>
+                  <td style={{ padding: "8px 14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input
+                        type="range" min={0} max={100}
+                        value={v.traffic_weight}
+                        onChange={(e) => updateWeight(v.id, parseInt(e.target.value))}
+                        style={{ width: 60, accentColor: "#6366f1" }}
+                      />
+                      <span style={{ fontSize: 12, fontFamily: "monospace", color: "#8b8ba0", minWidth: 28 }}>
+                        {v.traffic_weight}%
+                      </span>
                     </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={() => setEditingVariant(v)} style={{
-                        padding: "4px 10px", background: "#242438", color: "#8888aa",
-                        border: "1px solid #2a2a40", borderRadius: 6, fontSize: 12, cursor: "pointer",
+                  </td>
+                  <td style={{ padding: "8px 14px", fontSize: 13, fontFamily: "monospace", color: "#e4e4f0" }}>
+                    {Number(vs?.clicks || 0).toLocaleString()}
+                  </td>
+                  <td style={{ padding: "8px 14px", fontSize: 13, fontFamily: "monospace", color: "#e4e4f0" }}>
+                    {Number(vs?.conversions || 0).toLocaleString()}
+                  </td>
+                  <td style={{ padding: "8px 14px", fontSize: 13, fontFamily: "monospace", color: "#6366f1", fontWeight: 600 }}>
+                    {vCR}%
+                  </td>
+                  <td style={{ padding: "8px 14px", fontSize: 13, fontFamily: "monospace", color: "#e4e4f0" }}>
+                    ${Number(vs?.total_payout || 0).toLocaleString()}
+                  </td>
+                  <td style={{ padding: "8px 14px" }}>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => {
+                        setEditingVariant(v.id);
+                        setEditValues((v.custom_fields as Record<string, string>) || {});
+                      }} style={{
+                        padding: "4px 10px", background: "#1e1e2e", color: "#8b8ba0",
+                        border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer",
                       }}>
                         Edit
                       </button>
-                      {campaign.template.startsWith("html-") && (
-                        <Link
-                          href={`/templates/${campaign.template.replace("html-", "")}/edit?variant=${v.id}&campaign=${campaignId}`}
-                          style={{
-                            padding: "4px 10px", background: "#242438", color: "#0ea5e9",
-                            border: "1px solid #1a3a5c", borderRadius: 6, fontSize: 12,
-                            textDecoration: "none", display: "flex", alignItems: "center", gap: 4,
-                          }}
-                        >
-                          <Paintbrush size={12} /> Visual
-                        </Link>
-                      )}
                       <button onClick={() => declareWinner(v.id)} style={{
-                        padding: "4px 10px", background: "#0a2e1a", color: "#00ca6b",
-                        border: "1px solid #0a5a2a", borderRadius: 6, fontSize: 12, cursor: "pointer",
+                        padding: "4px 10px", background: "#6366f115", color: "#6366f1",
+                        border: "none", borderRadius: 4, fontSize: 11, cursor: "pointer",
                       }}>
                         Winner
                       </button>
                     </div>
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#666688" }}>Clicks</div>
-                      <div className="stat-number" style={{ fontSize: 16, fontWeight: 600, color: "#fff" }}>
-                        {Number(vStats?.clicks || 0).toLocaleString()}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#666688" }}>Conv.</div>
-                      <div className="stat-number" style={{ fontSize: 16, fontWeight: 600, color: "#fff" }}>
-                        {Number(vStats?.conversions || 0).toLocaleString()}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#666688" }}>CR</div>
-                      <div className="stat-number" style={{ fontSize: 16, fontWeight: 600, color: isWinner ? "#00ca6b" : "#fff" }}>
-                        {vStats?.conversion_rate || 0}%
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#666688" }}>Payout</div>
-                      <div className="stat-number" style={{ fontSize: 16, fontWeight: 600, color: "#fff" }}>
-                        ${Number(vStats?.total_payout || 0).toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: 8, fontSize: 12, color: "#666688" }}>
-                    {v.headline && <span>&ldquo;{v.headline}&rdquo;</span>}
-                    {v.cta_text && <span> &middot; CTA: {v.cta_text}</span>}
-                  </div>
-                </div>
+                  </td>
+                </tr>
               );
             })}
-          </div>
-        </div>
-
-        {/* Traffic Split Sidebar */}
-        <div>
-          <TrafficSplitSlider
-            variants={variants.map((v) => ({ id: v.id, name: v.name, traffic_weight: v.traffic_weight, is_control: v.is_control }))}
-            onUpdate={(updated) => {
-              setVariants((prev) => prev.map((v) => {
-                const u = updated.find((x) => x.id === v.id);
-                return u ? { ...v, traffic_weight: u.traffic_weight } : v;
-              }));
-            }}
-          />
-        </div>
+          </tbody>
+        </table>
       </div>
 
-      {/* Charts */}
-      <h2 style={{ fontSize: 16, fontWeight: 600, color: "#fff", marginBottom: 12 }}>Performance</h2>
-      <StatsChart
-        daily={dailyData}
-        variants={variants.map((v) => ({ id: v.id, name: v.name }))}
-      />
+      {/* Edit Variant Modal */}
+      {editingVariant && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)" }} onClick={() => setEditingVariant(null)} />
+          <div style={{
+            position: "relative", width: 520, maxHeight: "80vh", overflowY: "auto",
+            background: "#111118", borderRadius: 12, border: "1px solid #1e1e2e", padding: 24,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 600, color: "#e4e4f0", margin: 0 }}>
+                Edit: {variants.find((v) => v.id === editingVariant)?.name}
+              </h3>
+              <button onClick={() => setEditingVariant(null)} style={{ background: "none", border: "none", color: "#6b6b80", cursor: "pointer", fontSize: 16 }}>
+                ✕
+              </button>
+            </div>
 
-      {/* Variant Editor Drawer */}
-      {editingVariant && campaign && (
-        <VariantEditor
-          variant={editingVariant}
-          editableFields={editableFields}
-          campaignSlug={campaign.slug}
-          onClose={() => setEditingVariant(null)}
-          onSave={(updated) => {
-            setVariants((prev) => prev.map((v) => v.id === updated.id ? updated : v));
-            setEditingVariant(null);
-          }}
-        />
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {/* Standard fields always shown */}
+              <div>
+                <label style={{ fontSize: 11, color: "#6b6b80", display: "block", marginBottom: 3, fontFamily: "monospace" }}>CTA_URL</label>
+                <input value={editValues.CTA_URL || ""} onChange={(e) => setEditValues({ ...editValues, CTA_URL: e.target.value })}
+                  style={{ width: "100%", padding: "8px 12px", background: "#16161e", border: "1px solid #1e1e2e", borderRadius: 6, color: "#e4e4f0", fontSize: 12, boxSizing: "border-box" }}
+                  placeholder="https://operator.com/register?btag=..." />
+              </div>
+
+              {/* Lander-specific variables */}
+              {landerVars.filter((v: string) => v !== "CTA_URL").map((v: string) => (
+                <div key={v}>
+                  <label style={{ fontSize: 11, color: "#6b6b80", display: "block", marginBottom: 3, fontFamily: "monospace" }}>{`{{${v}}}`}</label>
+                  <input
+                    value={editValues[v] || ""}
+                    onChange={(e) => setEditValues({ ...editValues, [v]: e.target.value })}
+                    style={{ width: "100%", padding: "8px 12px", background: "#16161e", border: "1px solid #1e1e2e", borderRadius: 6, color: "#e4e4f0", fontSize: 12, boxSizing: "border-box" }}
+                    placeholder={lander?.defaults?.[v] || ""}
+                  />
+                </div>
+              ))}
+
+              {landerVars.length === 0 && (
+                <p style={{ fontSize: 12, color: "#555" }}>No lander variables. You can still edit CTA URL above.</p>
+              )}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button onClick={() => setEditingVariant(null)} style={{
+                padding: "8px 14px", background: "transparent", color: "#6b6b80",
+                border: "1px solid #1e1e2e", borderRadius: 6, fontSize: 12, cursor: "pointer",
+              }}>
+                Cancel
+              </button>
+              <button onClick={() => saveVariant(editingVariant)} disabled={saving} style={{
+                padding: "8px 18px", background: "#6366f1", color: "#fff",
+                border: "none", borderRadius: 6, fontSize: 12, fontWeight: 500, cursor: "pointer",
+                opacity: saving ? 0.7 : 1,
+              }}>
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
+
+      {/* Charts */}
+      <h2 style={{ fontSize: 14, fontWeight: 500, color: "#6b6b80", marginBottom: 10 }}>Performance</h2>
+      <StatsChart daily={dailyData} variants={variants.map((v) => ({ id: v.id, name: v.name }))} />
     </div>
   );
 }

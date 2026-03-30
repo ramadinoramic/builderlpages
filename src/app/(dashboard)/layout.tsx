@@ -2,13 +2,13 @@ import Sidebar from "@/components/dashboard/Sidebar";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "#0f0f1a" }}>
+    <div style={{ display: "flex", minHeight: "100vh", background: "#0c0c14" }}>
       <Sidebar />
-      <main style={{ flex: 1, marginLeft: 220, padding: "24px 32px", minHeight: "100vh" }} className="dashboard-main">
+      <main className="dashboard-main" style={{ flex: 1, marginLeft: 200, padding: "20px 28px", minHeight: "100vh" }}>
         {children}
         <style dangerouslySetInnerHTML={{ __html: `
           @media (max-width: 768px) {
-            .dashboard-main { margin-left: 0 !important; padding: 16px !important; padding-top: 56px !important; }
+            .dashboard-main { margin-left: 56px !important; padding: 14px !important; }
           }
         `}} />
       </main>

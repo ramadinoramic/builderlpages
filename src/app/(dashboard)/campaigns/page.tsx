@@ -1,94 +1,80 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import Link from "next/link";
-import StatusBadge from "@/components/dashboard/StatusBadge";
 
 export default async function CampaignsPage() {
   const supabase = createServerSupabaseClient();
 
-  const { data: campaigns } = await supabase
-    .from("campaigns")
-    .select("*")
-    .order("updated_at", { ascending: false });
+  const [{ data: campaigns }, { data: stats }] = await Promise.all([
+    supabase.from("campaigns").select("*").order("updated_at", { ascending: false }),
+    supabase.from("campaign_stats").select("*"),
+  ]);
 
-  const { data: stats } = await supabase
-    .from("campaign_stats")
-    .select("*");
-
-  // Aggregate stats per campaign
-  const campaignStatsMap: Record<string, { clicks: number; conversions: number; conversion_rate: number; total_payout: number }> = {};
+  const perCampaign: Record<string, { clicks: number; conversions: number; payout: number }> = {};
   for (const s of stats || []) {
-    if (!campaignStatsMap[s.campaign_id]) {
-      campaignStatsMap[s.campaign_id] = { clicks: 0, conversions: 0, conversion_rate: 0, total_payout: 0 };
-    }
-    campaignStatsMap[s.campaign_id].clicks += Number(s.clicks);
-    campaignStatsMap[s.campaign_id].conversions += Number(s.conversions);
-    campaignStatsMap[s.campaign_id].total_payout += Number(s.total_payout);
-  }
-  for (const id of Object.keys(campaignStatsMap)) {
-    const c = campaignStatsMap[id];
-    c.conversion_rate = c.clicks > 0 ? Math.round((c.conversions / c.clicks) * 10000) / 100 : 0;
+    if (!perCampaign[s.campaign_id]) perCampaign[s.campaign_id] = { clicks: 0, conversions: 0, payout: 0 };
+    perCampaign[s.campaign_id].clicks += Number(s.clicks);
+    perCampaign[s.campaign_id].conversions += Number(s.conversions);
+    perCampaign[s.campaign_id].payout += Number(s.total_payout);
   }
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, color: "#fff", margin: 0 }}>Campaigns</h1>
-        <Link
-          href="/campaigns/new"
-          style={{
-            padding: "10px 20px", background: "#00ca6b", color: "#fff", borderRadius: 8,
-            textDecoration: "none", fontWeight: 600, fontSize: 14,
-          }}
-        >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h1 style={{ fontSize: 20, fontWeight: 600, color: "#e4e4f0", margin: 0 }}>Campaigns</h1>
+        <Link href="/campaigns/new" style={{
+          padding: "8px 16px", background: "#6366f1", color: "#fff",
+          borderRadius: 6, textDecoration: "none", fontWeight: 500, fontSize: 13,
+        }}>
           + New Campaign
         </Link>
       </div>
 
-      <div style={{ background: "#1a1a2e", borderRadius: 12, border: "1px solid #2a2a40", overflow: "hidden" }}>
+      <div style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
-            <tr style={{ borderBottom: "1px solid #2a2a40" }}>
-              {["Campaign", "Status", "Geo", "Operator", "Clicks", "Conv.", "CR", "Payout"].map((h) => (
-                <th key={h} style={{ padding: "12px 16px", textAlign: "left", fontSize: 12, fontWeight: 500, color: "#666688", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            <tr style={{ borderBottom: "1px solid #1e1e2e" }}>
+              {["Campaign", "Status", "GEO", "Operator", "Source", "Clicks", "Conv.", "CR", "Revenue"].map((h) => (
+                <th key={h} style={{
+                  padding: "9px 14px", textAlign: "left", fontSize: 11, fontWeight: 500,
+                  color: "#6b6b80", textTransform: "uppercase", letterSpacing: 0.5,
+                }}>
                   {h}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {(campaigns || []).map((campaign) => {
-              const s = campaignStatsMap[campaign.id] || { clicks: 0, conversions: 0, conversion_rate: 0, total_payout: 0 };
+            {(campaigns || []).map((c) => {
+              const s = perCampaign[c.id] || { clicks: 0, conversions: 0, payout: 0 };
+              const cr = s.clicks > 0 ? (s.conversions / s.clicks * 100).toFixed(2) : "0.00";
+              const statusColor = c.status === "active" ? "#22c55e" : c.status === "paused" ? "#eab308" : c.status === "draft" ? "#6b6b80" : "#ef4444";
               return (
-                <tr key={campaign.id} style={{ borderBottom: "1px solid #2a2a40" }}>
-                  <td style={{ padding: "12px 16px" }}>
-                    <Link href={`/campaigns/${campaign.id}`} style={{ color: "#fff", textDecoration: "none", fontWeight: 500, fontSize: 14 }}>
-                      {campaign.name}
+                <tr key={c.id} style={{ borderBottom: "1px solid #1e1e2e" }}>
+                  <td style={{ padding: "9px 14px" }}>
+                    <Link href={`/campaigns/${c.id}`} style={{ color: "#e4e4f0", textDecoration: "none", fontSize: 13, fontWeight: 500 }}>
+                      {c.name}
                     </Link>
-                    <div style={{ fontSize: 11, color: "#666688", marginTop: 2 }}>/lp/{campaign.slug}</div>
+                    <div style={{ fontSize: 10, color: "#555", marginTop: 1 }}>/lp/{c.slug}</div>
                   </td>
-                  <td style={{ padding: "12px 16px" }}><StatusBadge status={campaign.status} /></td>
-                  <td style={{ padding: "12px 16px", color: "#8888aa", fontSize: 13 }}>{campaign.geo || "—"}</td>
-                  <td style={{ padding: "12px 16px", color: "#8888aa", fontSize: 13 }}>{campaign.operator || "—"}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span className="stat-number" style={{ color: "#fff", fontSize: 14 }}>{s.clicks.toLocaleString()}</span>
+                  <td style={{ padding: "9px 14px" }}>
+                    <span style={{ fontSize: 11, color: statusColor, fontWeight: 500 }}>{c.status}</span>
                   </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span className="stat-number" style={{ color: "#fff", fontSize: 14 }}>{s.conversions.toLocaleString()}</span>
-                  </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span className="stat-number" style={{ color: "#00ca6b", fontSize: 14, fontWeight: 600 }}>{s.conversion_rate}%</span>
-                  </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span className="stat-number" style={{ color: "#fff", fontSize: 14 }}>${s.total_payout.toLocaleString()}</span>
-                  </td>
+                  <td style={{ padding: "9px 14px", fontSize: 12, color: "#8b8ba0" }}>{c.geo || "—"}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 12, color: "#8b8ba0" }}>{c.operator || "—"}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 12, color: "#8b8ba0" }}>{c.traffic_source || "—"}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 13, fontFamily: "monospace", color: "#e4e4f0" }}>{s.clicks.toLocaleString()}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 13, fontFamily: "monospace", color: "#e4e4f0" }}>{s.conversions.toLocaleString()}</td>
+                  <td style={{ padding: "9px 14px", fontSize: 13, fontFamily: "monospace", color: "#6366f1", fontWeight: 600 }}>{cr}%</td>
+                  <td style={{ padding: "9px 14px", fontSize: 13, fontFamily: "monospace", color: "#e4e4f0" }}>${s.payout.toLocaleString()}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-
         {(!campaigns || campaigns.length === 0) && (
-          <div style={{ textAlign: "center", padding: 48, color: "#666688" }}>No campaigns yet</div>
+          <div style={{ textAlign: "center", padding: 40, color: "#6b6b80", fontSize: 13 }}>
+            No campaigns yet
+          </div>
         )}
       </div>
     </div>

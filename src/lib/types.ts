@@ -4,10 +4,25 @@ export interface Campaign {
   slug: string;
   status: "draft" | "active" | "paused" | "archived";
   template: string;
+  lander_id: string | null;
   geo: string | null;
   operator: string | null;
   traffic_source: string | null;
   notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Lander {
+  id: string;
+  name: string;
+  html: string;
+  variables: string[];
+  defaults: Record<string, string>;
+  thumbnail: string | null;
+  notes: string | null;
+  is_archived: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;

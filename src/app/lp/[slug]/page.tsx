@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
-import { getTemplateComponent } from "@/components/templates/TemplateRegistry";
 
 interface PageProps {
   params: { slug: string };
@@ -11,7 +10,6 @@ interface PageProps {
 export default async function LandingPage({ params, searchParams }: PageProps) {
   const supabase = createServerSupabaseClient();
 
-  // Fetch campaign by slug
   const { data: campaign } = await supabase
     .from("campaigns")
     .select("*")
@@ -20,9 +18,8 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
 
   if (!campaign) return notFound();
 
-  // Determine variant: preview override > cookie > first active variant
+  // Determine variant
   let variantId = searchParams.preview || null;
-
   if (!variantId) {
     const cookieStore = cookies();
     const variantCookie = cookieStore.get(`ab_${params.slug}`);
@@ -40,7 +37,6 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
     variant = data;
   }
 
-  // Fallback: get any active variant
   if (!variant) {
     const { data } = await supabase
       .from("variants")
@@ -55,12 +51,59 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
 
   if (!variant) return notFound();
 
+  // Build the click-tracked CTA URL
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+  const ctaUrl = variant.cta_url
+    ? `${baseUrl}/api/click?campaign_id=${campaign.id}&variant_id=${variant.id}&redirect=${encodeURIComponent(variant.cta_url)}`
+    : "#";
+
+  // If campaign uses a lander from the repository, serve raw HTML
+  if (campaign.lander_id) {
+    const { data: lander } = await supabase
+      .from("landers")
+      .select("html, variables, defaults")
+      .eq("id", campaign.lander_id)
+      .single();
+
+    if (lander) {
+      const overrides: Record<string, string> = {
+        ...(lander.defaults as Record<string, string> || {}),
+        ...((variant.custom_fields as Record<string, string>) || {}),
+        CTA_URL: ctaUrl,
+      };
+
+      // Also map standard variant fields into variables
+      if (variant.headline) overrides.HEADLINE = variant.headline;
+      if (variant.subheadline) overrides.SUBHEADLINE = variant.subheadline;
+      if (variant.cta_text) overrides.CTA_TEXT = variant.cta_text;
+      if (variant.cta_subtext) overrides.CTA_SUBTEXT = variant.cta_subtext;
+      if (variant.cta_color) overrides.CTA_COLOR = variant.cta_color;
+      if (variant.hero_image_url) overrides.HERO_IMAGE = variant.hero_image_url;
+      if (variant.body_text) overrides.BODY_TEXT = variant.body_text;
+
+      let html = lander.html as string;
+
+      // Replace all {{VARIABLE}} placeholders
+      for (const [key, value] of Object.entries(overrides)) {
+        html = html.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+      }
+
+      // Remove any remaining unreplaced variables
+      html = html.replace(/\{\{[A-Z_]+\}\}/g, "");
+
+      return (
+        <html>
+          <head><meta charSet="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
+          <body dangerouslySetInnerHTML={{ __html: html }} />
+        </html>
+      );
+    }
+  }
+
+  // Fallback: built-in templates (legacy support)
+  const { getTemplateComponent } = await import("@/components/templates/TemplateRegistry");
   const TemplateComponent = getTemplateComponent(campaign.template);
   if (!TemplateComponent) return notFound();
-
-  // Build click-tracked CTA URL
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-  const ctaUrl = `${baseUrl}/api/click?campaign_id=${campaign.id}&variant_id=${variant.id}&redirect=${encodeURIComponent(variant.cta_url || "")}`;
 
   const steps = typeof variant.steps === "string" ? JSON.parse(variant.steps) : variant.steps || [];
   const paymentMethods = typeof variant.payment_methods === "string" ? JSON.parse(variant.payment_methods) : variant.payment_methods || [];
