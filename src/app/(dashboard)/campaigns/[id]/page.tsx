@@ -265,6 +265,18 @@ export default function CampaignDetailPage() {
                       }}>
                         Edit
                       </button>
+                      {campaign.template.startsWith("html-") && (
+                        <Link
+                          href={`/templates/${campaign.template.replace("html-", "")}/edit?variant=${v.id}&campaign=${campaignId}`}
+                          style={{
+                            padding: "4px 10px", background: "#242438", color: "#0ea5e9",
+                            border: "1px solid #1a3a5c", borderRadius: 6, fontSize: 12,
+                            textDecoration: "none", display: "flex", alignItems: "center", gap: 4,
+                          }}
+                        >
+                          <Paintbrush size={12} /> Visual
+                        </Link>
+                      )}
                       <button onClick={() => declareWinner(v.id)} style={{
                         padding: "4px 10px", background: "#0a2e1a", color: "#00ca6b",
                         border: "1px solid #0a5a2a", borderRadius: 6, fontSize: 12, cursor: "pointer",
