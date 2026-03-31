@@ -169,11 +169,11 @@ export default function CampaignDetailPage() {
 
   const deleteCampaign = async () => {
     if (!confirm("Delete this campaign and all its data? This cannot be undone.")) return;
-    const supabase = createClient();
-    await supabase.from("conversions").delete().eq("campaign_id", campaignId);
-    await supabase.from("clicks").delete().eq("campaign_id", campaignId);
-    await supabase.from("variants").delete().eq("campaign_id", campaignId);
-    await supabase.from("campaigns").delete().eq("id", campaignId);
+    await fetch("/api/campaigns/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [campaignId] }),
+    });
     router.push("/campaigns");
   };
 
