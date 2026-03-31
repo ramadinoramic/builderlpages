@@ -18,11 +18,11 @@ export default function NewCampaignPage() {
   const [geo, setGeo] = useState("");
   const [source, setSource] = useState("");
   const [landerId, setLanderId] = useState<string | null>(null);
-  const [ctaUrl, setCtaUrl] = useState("");
+  const [ctaUrls, setCtaUrls] = useState<string[]>([""]);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
 
   const selectedLander = landers.find((l) => l.id === landerId);
-  const variables = (selectedLander?.variables || []).filter((v: string) => v !== "CTA_URL");
+  const variables = (selectedLander?.variables || []).filter((v: string) => v !== "CTA_URL" && v !== "CTA_URLS");
 
   useEffect(() => {
     async function load() {
@@ -68,8 +68,8 @@ export default function NewCampaignPage() {
       name: "Default",
       traffic_weight: 100,
       is_control: true,
-      cta_url: ctaUrl || null,
-      custom_fields: { ...overrides, CTA_URL: ctaUrl },
+      cta_url: ctaUrls.filter(Boolean)[0] || null,
+      custom_fields: { ...overrides, CTA_URL: ctaUrls.filter(Boolean)[0] || "", CTA_URLS: JSON.stringify(ctaUrls.filter(Boolean)) },
     });
 
     router.push(`/campaigns/${campaign.id}`);
@@ -174,20 +174,45 @@ export default function NewCampaignPage() {
           <div style={{ ...section, borderColor: "#6366f130" }}>
             <h2 style={sectionTitle}>
               <span style={{ width: 20, height: 20, borderRadius: 4, background: "#6366f120", color: "#6366f1", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>3</span>
-              CTA / Offer Link
+              CTA / Offer URLs
             </h2>
-            <div>
-              <label style={label}>Destination URL (where the CTA button sends traffic) *</label>
-              <input
-                value={ctaUrl}
-                onChange={(e) => setCtaUrl(e.target.value)}
-                style={{ ...input, borderColor: ctaUrl ? "#6366f140" : "#1e1e2e" }}
-                placeholder="https://bahigo.com/register?btag=AFFTAG"
-              />
-              <p style={{ fontSize: 11, color: "#555", margin: "6px 0 0" }}>
-                Click tracking is auto-injected. Your lander&apos;s {"{{CTA_URL}}"} will be replaced with a tracked redirect URL.
-              </p>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <label style={label}>Destination URLs (where the CTA sends traffic)</label>
+              {ctaUrls.length < 3 && (
+                <button onClick={() => setCtaUrls([...ctaUrls, ""])} style={{
+                  padding: "2px 8px", background: "#6366f120", color: "#6366f1",
+                  border: "none", borderRadius: 4, fontSize: 10, cursor: "pointer", fontWeight: 500,
+                }}>
+                  + Add URL
+                </button>
+              )}
             </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {ctaUrls.map((url, i) => (
+                <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {ctaUrls.length > 1 && <span style={{ fontSize: 10, color: "#6366f1", fontFamily: "monospace", minWidth: 14 }}>{i + 1}.</span>}
+                  <input
+                    value={url}
+                    onChange={(e) => { const next = [...ctaUrls]; next[i] = e.target.value; setCtaUrls(next); }}
+                    style={{ ...input, flex: 1, borderColor: url ? "#6366f140" : "#1e1e2e" }}
+                    placeholder="https://operator.com/register?btag=AFFTAG"
+                  />
+                  {ctaUrls.length > 1 && (
+                    <button onClick={() => setCtaUrls(ctaUrls.filter((_, j) => j !== i))} style={{
+                      background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, padding: 2,
+                    }}>✕</button>
+                  )}
+                </div>
+              ))}
+            </div>
+            {ctaUrls.filter(Boolean).length > 1 && (
+              <p style={{ fontSize: 10, color: "#6366f1", margin: "6px 0 0", opacity: 0.7 }}>
+                Traffic will be split equally across {ctaUrls.filter(Boolean).length} URLs on each CTA click.
+              </p>
+            )}
+            <p style={{ fontSize: 10, color: "#555", margin: "4px 0 0" }}>
+              Click tracking is auto-injected. Your lander&apos;s {"{{CTA_URL}}"} will be replaced with a tracked redirect.
+            </p>
           </div>
 
           {/* Variable Overrides */}
@@ -242,7 +267,7 @@ export default function NewCampaignPage() {
                   <Row label="GEO" value={geo || "—"} />
                   <Row label="Source" value={source || "—"} />
                   <Row label="Lander" value={selectedLander?.name || "Not selected"} highlight={!!selectedLander} />
-                  <Row label="CTA URL" value={ctaUrl ? ctaUrl.substring(0, 40) + (ctaUrl.length > 40 ? "..." : "") : "Not set"} highlight={!!ctaUrl} />
+                  <Row label="CTA URLs" value={ctaUrls.filter(Boolean).length > 0 ? `${ctaUrls.filter(Boolean).length} URL${ctaUrls.filter(Boolean).length > 1 ? "s" : ""}` : "Not set"} highlight={ctaUrls.filter(Boolean).length > 0} />
                   <Row label="Variables" value={`${variables.length} customizable`} />
                 </div>
 

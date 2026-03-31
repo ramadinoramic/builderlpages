@@ -8,16 +8,17 @@ interface PageProps {
 }
 
 function getBaseUrl(): string {
-  // 1. Explicit config (best)
+  // 1. Explicit env var (always wins)
   if (process.env.NEXT_PUBLIC_BASE_URL) return process.env.NEXT_PUBLIC_BASE_URL.replace(/\/$/, "");
-  // 2. Vercel auto-detected
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  // 3. Try to read from request headers
+  // 2. Request host header — this is the ACTUAL domain the user is visiting
+  //    (not VERCEL_URL which is the preview/deployment domain)
   const headersList = headers();
   const host = headersList.get("host");
-  const proto = headersList.get("x-forwarded-proto") || "https";
-  if (host) return `${proto}://${host}`;
-  // 4. Fallback
+  if (host) {
+    const proto = headersList.get("x-forwarded-proto") || "https";
+    return `${proto}://${host}`;
+  }
+  // 3. Fallback
   return "http://localhost:3000";
 }
 
@@ -47,30 +48,51 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
   const variant = await getVariant(supabase, campaign.id, params.slug, searchParams.preview);
   if (!variant) return notFound();
 
-  // Get the raw CTA destination from all possible sources
   const cf = (variant.custom_fields || {}) as Record<string, string>;
-  const rawCtaUrl = variant.cta_url || cf.CTA_URL || "";
 
-  // Build fully absolute tracked CTA URL
-  const trackedCtaUrl = rawCtaUrl
-    ? `${baseUrl}/api/click?campaign_id=${campaign.id}&variant_id=${variant.id}&redirect=${encodeURIComponent(rawCtaUrl)}`
-    : "";
+  // --- Multi-CTA support ---
+  // CTA URLs can be stored as:
+  //   cta_url (single, legacy) OR
+  //   custom_fields.CTA_URLS (JSON array of up to 3 URLs for rotation)
+  //   custom_fields.CTA_URL (single)
+  let ctaUrls: string[] = [];
+  try {
+    const raw = cf.CTA_URLS;
+    if (raw) ctaUrls = JSON.parse(raw).filter(Boolean);
+  } catch {}
+  if (ctaUrls.length === 0) {
+    const single = variant.cta_url || cf.CTA_URL || "";
+    if (single) ctaUrls = [single];
+  }
 
-  // --- Lander repository: serve raw HTML ---
+  // Build tracked URLs for all CTAs
+  const trackedCtaUrls = ctaUrls.map((url) =>
+    `${baseUrl}/api/click?campaign_id=${campaign.id}&variant_id=${variant.id}&redirect=${encodeURIComponent(url)}`
+  );
+  const primaryTrackedUrl = trackedCtaUrls[0] || "";
+
+  // --- Lander repository ---
   if (campaign.lander_id) {
     const { data: lander } = await supabase.from("landers").select("html, defaults").eq("id", campaign.lander_id).single();
     if (!lander) return notFound();
 
-    // Build variable overrides: defaults < custom_fields < standard fields
     const overrides: Record<string, string> = {
       ...(lander.defaults as Record<string, string> || {}),
       ...cf,
     };
-    if (trackedCtaUrl) overrides.CTA_URL = trackedCtaUrl;
+    // Always set CTA_URL to the primary tracked URL
+    if (primaryTrackedUrl) overrides.CTA_URL = primaryTrackedUrl;
+    // Also set CTA_URL_2, CTA_URL_3 if available
+    if (trackedCtaUrls[1]) overrides.CTA_URL_2 = trackedCtaUrls[1];
+    if (trackedCtaUrls[2]) overrides.CTA_URL_3 = trackedCtaUrls[2];
+    // Standard variant fields
     if (variant.headline) overrides.HEADLINE = variant.headline;
     if (variant.subheadline) overrides.SUBHEADLINE = variant.subheadline;
     if (variant.cta_text) overrides.CTA_TEXT = variant.cta_text;
     if (variant.cta_color) overrides.CTA_COLOR = variant.cta_color;
+
+    // Remove CTA_URLS from overrides (it's JSON, not a display value)
+    delete overrides.CTA_URLS;
 
     let html = lander.html as string;
 
@@ -79,13 +101,14 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
       if (!value) continue;
       html = html.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
     }
-
-    // Remove any remaining unreplaced variables
     html = html.replace(/\{\{[A-Z][A-Z0-9_]*\}\}/g, "");
 
-    // Inject CTA script for data-cta / class-based CTA elements
-    if (trackedCtaUrl) {
-      const script = `<script>(function(){var u=${JSON.stringify(trackedCtaUrl)};document.querySelectorAll('a[data-cta],a.cta,a.cta-btn,a.cta-button,.cta a,.cta-link a').forEach(function(a){a.href=u});})();<\/script>`;
+    // Inject CTA rotation script — randomly picks from available URLs on each click
+    if (trackedCtaUrls.length > 0) {
+      const script = trackedCtaUrls.length === 1
+        ? `<script>(function(){var u=${JSON.stringify(primaryTrackedUrl)};document.querySelectorAll('a[data-cta],a.cta,a.cta-btn,a.cta-button,.cta a,.cta-link a').forEach(function(a){a.href=u});})();<\/script>`
+        : `<script>(function(){var urls=${JSON.stringify(trackedCtaUrls)};function pick(){return urls[Math.floor(Math.random()*urls.length)];}document.querySelectorAll('a[data-cta],a.cta,a.cta-btn,a.cta-button,.cta a,.cta-link a').forEach(function(a){a.href=pick();a.addEventListener("click",function(e){e.preventDefault();window.location.href=pick();});});})();<\/script>`;
+
       if (html.includes("</body>")) {
         html = html.replace("</body>", script + "</body>");
       } else {
@@ -93,8 +116,6 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
       }
     }
 
-    // Serve lander in an iframe — preserves its full HTML structure
-    // All URLs in the HTML must be absolute (tracked CTA URL is already absolute)
     return (
       <>
         <style dangerouslySetInnerHTML={{ __html: `html,body{margin:0;padding:0;height:100%;overflow:hidden}` }} />
@@ -124,7 +145,7 @@ export default async function LandingPage({ params, searchParams }: PageProps) {
         cta_text: variant.cta_text || "",
         cta_subtext: variant.cta_subtext || "",
         cta_color: variant.cta_color || "#00ca6b",
-        cta_url: trackedCtaUrl || "#",
+        cta_url: primaryTrackedUrl || "#",
         hero_image_url: variant.hero_image_url || undefined,
         body_text: variant.body_text || undefined,
         steps,

@@ -7,6 +7,16 @@ import { type Campaign, type Variant, type CampaignStats, type Lander } from "@/
 import StatsChart from "@/components/dashboard/StatsChart";
 import Link from "next/link";
 
+function getCtaUrls(v: Variant): string[] {
+  const cf = (v.custom_fields || {}) as Record<string, string>;
+  try {
+    const raw = cf.CTA_URLS;
+    if (raw) { const arr = JSON.parse(raw).filter(Boolean); if (arr.length > 0) return arr; }
+  } catch {}
+  const single = v.cta_url || cf.CTA_URL || "";
+  return single ? [single] : [];
+}
+
 export default function CampaignDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -22,12 +32,11 @@ export default function CampaignDetailPage() {
   // Edit state
   const [editingVariant, setEditingVariant] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-  const [editCta, setEditCta] = useState("");
+  const [editCtaUrls, setEditCtaUrls] = useState<string[]>([""]);
   const [editWeight, setEditWeight] = useState(50);
   const [editVars, setEditVars] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  // Lander swap
   const [changingLander, setChangingLander] = useState(false);
   const [allLanders, setAllLanders] = useState<Lander[]>([]);
 
@@ -38,7 +47,6 @@ export default function CampaignDetailPage() {
       supabase.from("variants").select("*").eq("campaign_id", campaignId).order("is_control", { ascending: false }),
       supabase.from("campaign_stats").select("*").eq("campaign_id", campaignId),
     ]);
-
     if (cRes.data) {
       setCampaign(cRes.data as Campaign);
       if (cRes.data.lander_id) {
@@ -48,7 +56,6 @@ export default function CampaignDetailPage() {
     }
     if (vRes.data) setVariants(vRes.data as Variant[]);
     if (sRes.data) setStats(sRes.data as CampaignStats[]);
-
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/stats`);
       if (res.ok) setDailyData((await res.json()).daily || {});
@@ -61,17 +68,17 @@ export default function CampaignDetailPage() {
   const toggleStatus = async () => {
     if (!campaign) return;
     const supabase = createClient();
-    const newStatus = campaign.status === "active" ? "paused" : "active";
-    await supabase.from("campaigns").update({ status: newStatus }).eq("id", campaignId);
-    setCampaign({ ...campaign, status: newStatus });
+    const s = campaign.status === "active" ? "paused" : "active";
+    await supabase.from("campaigns").update({ status: s }).eq("id", campaignId);
+    setCampaign({ ...campaign, status: s });
   };
 
   const openEditVariant = (v: Variant) => {
     setEditingVariant(v.id);
     setEditName(v.name);
-    const varCf = (v.custom_fields || {}) as Record<string, string>;
-    setEditCta(v.cta_url || varCf.CTA_URL || "");
     setEditWeight(v.traffic_weight);
+    const urls = getCtaUrls(v);
+    setEditCtaUrls(urls.length > 0 ? urls : [""]);
     const cf = (v.custom_fields || {}) as Record<string, string>;
     setEditVars({ ...cf });
   };
@@ -80,11 +87,18 @@ export default function CampaignDetailPage() {
     if (!editingVariant) return;
     setSaving(true);
     const supabase = createClient();
+    const cleanUrls = editCtaUrls.filter(Boolean);
+    const primaryUrl = cleanUrls[0] || "";
+
     await supabase.from("variants").update({
       name: editName,
-      cta_url: editCta || null,
+      cta_url: primaryUrl || null,
       traffic_weight: editWeight,
-      custom_fields: { ...editVars, CTA_URL: editCta },
+      custom_fields: {
+        ...editVars,
+        CTA_URL: primaryUrl,
+        CTA_URLS: JSON.stringify(cleanUrls),
+      },
     }).eq("id", editingVariant);
     setEditingVariant(null);
     setSaving(false);
@@ -98,8 +112,7 @@ export default function CampaignDetailPage() {
     const { data } = await supabase.from("variants").insert({
       campaign_id: campaignId,
       name: `Variant ${String.fromCharCode(65 + variants.length)}`,
-      traffic_weight: 0,
-      is_control: false,
+      traffic_weight: 0, is_control: false,
       cta_url: existing?.cta_url || null,
       custom_fields: cf,
     }).select().single();
@@ -155,9 +168,8 @@ export default function CampaignDetailPage() {
   };
 
   const deleteCampaign = async () => {
-    if (!confirm("Delete this campaign and all its variants, clicks, and conversions? This cannot be undone.")) return;
+    if (!confirm("Delete this campaign and all its data? This cannot be undone.")) return;
     const supabase = createClient();
-    // Delete in order: conversions → clicks → variants → campaign
     await supabase.from("conversions").delete().eq("campaign_id", campaignId);
     await supabase.from("clicks").delete().eq("campaign_id", campaignId);
     await supabase.from("variants").delete().eq("campaign_id", campaignId);
@@ -173,7 +185,7 @@ export default function CampaignDetailPage() {
   const totalPayout = stats.reduce((s, st) => s + Number(st.total_payout), 0);
   const overallCR = totalClicks > 0 ? (totalConv / totalClicks * 100).toFixed(2) : "0.00";
   const statusColor = campaign.status === "active" ? "#22c55e" : campaign.status === "paused" ? "#eab308" : "#6b6b80";
-  const landerVars = (lander?.variables || []).filter((v: string) => v !== "CTA_URL");
+  const landerVars = (lander?.variables || []).filter((v: string) => v !== "CTA_URL" && v !== "CTA_URLS");
 
   const input: React.CSSProperties = { width: "100%", padding: "8px 12px", background: "#13131b", border: "1px solid #1e1e2e", borderRadius: 6, color: "#e4e4f0", fontSize: 13, boxSizing: "border-box", outline: "none" };
 
@@ -218,16 +230,13 @@ export default function CampaignDetailPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 16, marginBottom: 20 }}>
-        {/* Left — Variants */}
+        {/* Variants */}
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <h2 style={{ fontSize: 14, fontWeight: 500, color: "#6b6b80", margin: 0 }}>Variants & Traffic Split</h2>
-            <button onClick={addVariant} style={{ padding: "5px 12px", background: "#6366f1", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>
-              + Add Variant
-            </button>
+            <button onClick={addVariant} style={{ padding: "5px 12px", background: "#6366f1", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 500, cursor: "pointer" }}>+ Add Variant</button>
           </div>
 
-          {/* Traffic split bar */}
           {variants.length > 1 && (
             <div style={{ display: "flex", height: 6, borderRadius: 3, overflow: "hidden", marginBottom: 10, gap: 1 }}>
               {variants.map((v, i) => {
@@ -242,7 +251,7 @@ export default function CampaignDetailPage() {
               const vs = stats.find((s) => s.variant_id === v.id);
               const vCR = vs && Number(vs.clicks) > 0 ? (Number(vs.conversions) / Number(vs.clicks) * 100).toFixed(2) : "0.00";
               const colors = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6"];
-              const cf = (v.custom_fields || {}) as Record<string, string>;
+              const urls = getCtaUrls(v);
               return (
                 <div key={v.id} style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", padding: "12px 14px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -259,38 +268,25 @@ export default function CampaignDetailPage() {
                     </div>
                   </div>
 
-                  {/* Key info row */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 12, fontSize: 12 }}>
-                    <div>
-                      <div style={{ color: "#555", fontSize: 10, marginBottom: 1 }}>CTA URL</div>
-                      <div style={{ color: (v.cta_url || cf.CTA_URL) ? "#8b8ba0" : "#555", fontFamily: "monospace", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 280 }}>
-                        {v.cta_url || cf.CTA_URL || "Not set"}
+                  {/* CTA URLs */}
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ color: "#555", fontSize: 10, marginBottom: 2 }}>
+                      CTA URL{urls.length > 1 ? `s (${urls.length} — equal rotation)` : ""}
+                    </div>
+                    {urls.length === 0 && <div style={{ color: "#555", fontFamily: "monospace", fontSize: 11 }}>Not set</div>}
+                    {urls.map((u, ui) => (
+                      <div key={ui} style={{ color: "#8b8ba0", fontFamily: "monospace", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>
+                        {u}
                       </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ color: "#555", fontSize: 10 }}>Clicks</div>
-                      <div style={{ fontFamily: "monospace", color: "#e4e4f0" }}>{Number(vs?.clicks || 0).toLocaleString()}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ color: "#555", fontSize: 10 }}>Conv</div>
-                      <div style={{ fontFamily: "monospace", color: "#e4e4f0" }}>{Number(vs?.conversions || 0).toLocaleString()}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ color: "#555", fontSize: 10 }}>CR</div>
-                      <div style={{ fontFamily: "monospace", color: "#6366f1", fontWeight: 600 }}>{vCR}%</div>
-                    </div>
+                    ))}
                   </div>
 
-                  {/* Show variable overrides if any */}
-                  {landerVars.length > 0 && Object.keys(cf).some((k) => k !== "CTA_URL" && cf[k]) && (
-                    <div style={{ marginTop: 6, display: "flex", gap: 4, flexWrap: "wrap" }}>
-                      {landerVars.filter((vr: string) => cf[vr]).map((vr: string) => (
-                        <span key={vr} style={{ fontSize: 10, padding: "1px 6px", background: "#1e1e2e", borderRadius: 3, color: "#6b6b80", fontFamily: "monospace" }}>
-                          {vr}={cf[vr]?.substring(0, 20)}{(cf[vr]?.length || 0) > 20 ? "..." : ""}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  {/* Stats */}
+                  <div style={{ display: "flex", gap: 16, fontSize: 12 }}>
+                    <span style={{ color: "#6b6b80" }}>Clicks: <span style={{ fontFamily: "monospace", color: "#e4e4f0" }}>{Number(vs?.clicks || 0).toLocaleString()}</span></span>
+                    <span style={{ color: "#6b6b80" }}>Conv: <span style={{ fontFamily: "monospace", color: "#e4e4f0" }}>{Number(vs?.conversions || 0).toLocaleString()}</span></span>
+                    <span style={{ color: "#6b6b80" }}>CR: <span style={{ fontFamily: "monospace", color: "#6366f1", fontWeight: 600 }}>{vCR}%</span></span>
+                  </div>
                 </div>
               );
             })}
@@ -313,7 +309,6 @@ export default function CampaignDetailPage() {
                 {changingLander ? "Cancel" : "Change"}
               </button>
             </div>
-
             {changingLander ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {allLanders.map((l) => (
@@ -322,9 +317,7 @@ export default function CampaignDetailPage() {
                     color: l.id === campaign.lander_id ? "#6366f1" : "#8b8ba0",
                     border: `1px solid ${l.id === campaign.lander_id ? "#6366f130" : "#1e1e2e"}`,
                     borderRadius: 4, fontSize: 11, cursor: "pointer", textAlign: "left",
-                  }}>
-                    {l.name}
-                  </button>
+                  }}>{l.name}</button>
                 ))}
               </div>
             ) : lander ? (
@@ -338,16 +331,10 @@ export default function CampaignDetailPage() {
                     ))}
                   </div>
                 )}
-                <Link href={`/landers/${lander.id}`} style={{ display: "block", marginTop: 8, fontSize: 11, color: "#6b6b80", textDecoration: "none" }}>
-                  Edit lander HTML &rarr;
-                </Link>
+                <Link href={`/landers/${lander.id}`} style={{ display: "block", marginTop: 8, fontSize: 11, color: "#6b6b80", textDecoration: "none" }}>Edit lander &rarr;</Link>
               </div>
-            ) : (
-              <p style={{ fontSize: 12, color: "#555", margin: 0 }}>No lander assigned</p>
-            )}
+            ) : <p style={{ fontSize: 12, color: "#555", margin: 0 }}>No lander assigned</p>}
           </div>
-
-          {/* Quick preview */}
           {lander && (
             <div style={{ background: "#111118", borderRadius: 8, border: "1px solid #1e1e2e", overflow: "hidden" }}>
               <div style={{ padding: "6px 12px", borderBottom: "1px solid #1e1e2e", fontSize: 10, color: "#555" }}>Preview</div>
@@ -368,7 +355,7 @@ export default function CampaignDetailPage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {/* Variant name + weight */}
+              {/* Name + Weight */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 100px", gap: 10 }}>
                 <div>
                   <label style={{ fontSize: 11, color: "#6b6b80", display: "block", marginBottom: 3 }}>Variant Name</label>
@@ -380,21 +367,56 @@ export default function CampaignDetailPage() {
                 </div>
               </div>
 
-              {/* CTA URL — prominent */}
+              {/* Multi-CTA URLs */}
               <div style={{ background: "#6366f108", border: "1px solid #6366f120", borderRadius: 8, padding: 12 }}>
-                <label style={{ fontSize: 12, color: "#6366f1", display: "block", marginBottom: 4, fontWeight: 600 }}>CTA / Offer URL</label>
-                <input
-                  value={editCta}
-                  onChange={(e) => setEditCta(e.target.value)}
-                  style={{ ...input, borderColor: "#6366f130" }}
-                  placeholder="https://operator.com/register?btag=AFFTAG"
-                />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <label style={{ fontSize: 12, color: "#6366f1", fontWeight: 600 }}>
+                    CTA / Offer URLs
+                  </label>
+                  {editCtaUrls.length < 3 && (
+                    <button onClick={() => setEditCtaUrls([...editCtaUrls, ""])} style={{
+                      padding: "2px 8px", background: "#6366f120", color: "#6366f1",
+                      border: "none", borderRadius: 4, fontSize: 10, cursor: "pointer", fontWeight: 500,
+                    }}>
+                      + Add URL
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {editCtaUrls.map((url, i) => (
+                    <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <span style={{ fontSize: 10, color: "#6366f1", fontFamily: "monospace", minWidth: 14 }}>
+                        {editCtaUrls.length > 1 ? `${i + 1}.` : ""}
+                      </span>
+                      <input
+                        value={url}
+                        onChange={(e) => {
+                          const next = [...editCtaUrls];
+                          next[i] = e.target.value;
+                          setEditCtaUrls(next);
+                        }}
+                        style={{ ...input, flex: 1, borderColor: "#6366f130" }}
+                        placeholder="https://operator.com/register?btag=..."
+                      />
+                      {editCtaUrls.length > 1 && (
+                        <button onClick={() => setEditCtaUrls(editCtaUrls.filter((_, j) => j !== i))} style={{
+                          background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, padding: 2,
+                        }}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {editCtaUrls.filter(Boolean).length > 1 && (
+                  <p style={{ fontSize: 10, color: "#6366f1", margin: "6px 0 0", opacity: 0.7 }}>
+                    Traffic will be split equally across these {editCtaUrls.filter(Boolean).length} URLs on each click.
+                  </p>
+                )}
                 <p style={{ fontSize: 10, color: "#555", margin: "4px 0 0" }}>
-                  Visitors who click the CTA on the lander will be redirected to this URL via click tracking.
+                  Visitors who click the CTA will be redirected via click tracking.
                 </p>
               </div>
 
-              {/* Lander variable overrides */}
+              {/* Lander variables */}
               {landerVars.length > 0 && (
                 <div>
                   <label style={{ fontSize: 12, color: "#8b8ba0", display: "block", marginBottom: 6, fontWeight: 500 }}>Lander Variables</label>
@@ -402,12 +424,7 @@ export default function CampaignDetailPage() {
                     {landerVars.map((v: string) => (
                       <div key={v}>
                         <label style={{ fontSize: 10, color: "#6366f1", fontFamily: "monospace", display: "block", marginBottom: 2 }}>{`{{${v}}}`}</label>
-                        <input
-                          value={editVars[v] || ""}
-                          onChange={(e) => setEditVars({ ...editVars, [v]: e.target.value })}
-                          style={{ ...input, fontSize: 12 }}
-                          placeholder={lander?.defaults?.[v] || ""}
-                        />
+                        <input value={editVars[v] || ""} onChange={(e) => setEditVars({ ...editVars, [v]: e.target.value })} style={{ ...input, fontSize: 12 }} placeholder={lander?.defaults?.[v] || ""} />
                       </div>
                     ))}
                   </div>
@@ -425,7 +442,6 @@ export default function CampaignDetailPage() {
         </div>
       )}
 
-      {/* Charts */}
       <h2 style={{ fontSize: 14, fontWeight: 500, color: "#6b6b80", marginBottom: 10 }}>Performance</h2>
       <StatsChart daily={dailyData} variants={variants.map((v) => ({ id: v.id, name: v.name }))} />
     </div>
